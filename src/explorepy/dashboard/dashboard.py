@@ -3,23 +3,26 @@
 import os
 from functools import partial
 
+from datetime import datetime
+import logging
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 from bokeh.layouts import widgetbox, row, column, Spacer
-from bokeh.models import ColumnDataSource, ResetTool, PrintfTickFormatter, Panel, Tabs, SingleIntervalTicker, widgets, \
-    Toggle, TextInput, RadioGroup, Div, CustomJS
+from bokeh.models import ColumnDataSource, ResetTool, Panel, Tabs, SingleIntervalTicker, widgets, \
+    Toggle, TextInput, RadioGroup, Div, Button, CheckboxGroup, BoxZoomTool
 from bokeh.plotting import figure
 from bokeh.server.server import Server
-from bokeh.palettes import PRGn
+from bokeh.palettes import Category20
 from bokeh.core.property.validation import validate, without_property_validation
 from bokeh.transform import dodge
 from bokeh.themes import Theme
 from tornado import gen
 from jinja2 import Template
-from datetime import datetime
 
 from explorepy.tools import HeartRateEstimator
 from explorepy.stream_processor import TOPICS
 
+logger = logging.getLogger(__name__)
 ORN_SRATE = 20  # Hz
 EXG_VIS_SRATE = 125
 WIN_LENGTH = 10  # Seconds
@@ -35,7 +38,7 @@ SCALE_MENU = {"1 uV": 0, "5 uV": -0.66667, "10 uV": -1, "100 uV": -2, "200 uV": 
 TIME_RANGE_MENU = {"10 s": 10., "5 s": 5., "20 s": 20.}
 
 LINE_COLORS = ['green', '#42C4F7', 'red']
-FFT_COLORS = PRGn[8]
+FFT_COLORS = Category20[8]
 
 
 class Dashboard:
@@ -46,18 +49,23 @@ class Dashboard:
         Args:
             stream_processor (explorepy.stream_processor.StreamProcessor): Stream processor object
         """
+        logger.debug(f"Initializing dashboard in {mode} mode")
         self.explore = explore
         self.stream_processor = self.explore.stream_processor
         self.n_chan = self.stream_processor.device_info['adc_mask'].count(1)
         self.y_unit = DEFAULT_SCALE
         self.offsets = np.arange(1, self.n_chan + 1)[:, np.newaxis].astype(float)
         self.chan_key_list = [CHAN_LIST[i]
-                              for i, mask in enumerate(self.stream_processor.device_info['adc_mask']) if mask == 1]
+                              for i, mask in enumerate(reversed(self.stream_processor.device_info['adc_mask'])) if
+                              mask == 1]
         self.exg_mode = 'EEG'
         self.rr_estimator = None
         self.win_length = WIN_LENGTH
         self.mode = mode
         self.exg_fs = self.stream_processor.device_info['sampling_rate']
+        self._vis_time_offset = None
+        self._baseline_corrector = {"MA_length": 1.5 * EXG_VIS_SRATE,
+                                    "baseline": 0}
 
         # Init ExG data source
         exg_temp = np.zeros((self.n_chan, 2))
@@ -98,7 +106,7 @@ class Dashboard:
         self.fft_source = ColumnDataSource(data=init_data)
 
         # Init impedance measurement source
-        init_data = {'channel':   [CHAN_LIST[i] for i in range(0, self.n_chan)],
+        init_data = {'channel':   self.chan_key_list,
                      'impedance': ['NA' for i in range(self.n_chan)],
                      'row':       ['1' for i in range(self.n_chan)],
                      'color':     ['black' for i in range(self.n_chan)]}
@@ -110,11 +118,13 @@ class Dashboard:
     def start_server(self):
         """Start bokeh server"""
         validate(False)
+        logger.debug("Starting bokeh server...")
         self.server = Server({'/': self._init_doc}, num_procs=1)
         self.server.start()
 
     def start_loop(self):
         """Start io loop and show the dashboard"""
+        logger.debug("Starting bokeh io_loop...")
         self.server.io_loop.add_callback(self.server.show, "/")
         self.server.io_loop.start()
 
@@ -127,16 +137,34 @@ class Dashboard:
 
         """
         time_vector, exg = packet.get_data(self.exg_fs)
+        if self._vis_time_offset is None:
+            self._vis_time_offset = time_vector[0]
+        time_vector -= self._vis_time_offset
         self._exg_source_orig.stream(dict(zip(self.chan_key_list, exg)), rollover=int(self.exg_fs * self.win_length))
 
-        # Downsampling
-        exg = exg[:, ::int(self.exg_fs / EXG_VIS_SRATE)]
-        time_vector = time_vector[::int(self.exg_fs / EXG_VIS_SRATE)]
-        # Update ExG unit
-        exg = self.offsets + exg / self.y_unit
-        new_data = dict(zip(self.chan_key_list, exg))
-        new_data['t'] = time_vector
-        self.doc.add_next_tick_callback(partial(self._update_exg, new_data=new_data))
+        if self.mode == 'signal':
+            # Downsampling
+            exg = exg[:, ::int(self.exg_fs / EXG_VIS_SRATE)]
+            time_vector = time_vector[::int(self.exg_fs / EXG_VIS_SRATE)]
+
+            # Baseline correction
+            if self.baseline_widget.active:
+                samples_avg = exg.mean(axis=1)
+                if self._baseline_corrector["baseline"] is None:
+                    self._baseline_corrector["baseline"] = samples_avg
+                else:
+                    self._baseline_corrector["baseline"] -= (
+                            (self._baseline_corrector["baseline"] - samples_avg) / self._baseline_corrector["MA_length"] *
+                            exg.shape[1])
+                exg -= self._baseline_corrector["baseline"][:, np.newaxis]
+            else:
+                self._baseline_corrector["baseline"] = None
+
+            # Update ExG unit
+            exg = self.offsets + exg / self.y_unit
+            new_data = dict(zip(self.chan_key_list, exg))
+            new_data['t'] = time_vector
+            self.doc.add_next_tick_callback(partial(self._update_exg, new_data=new_data))
 
     def orn_callback(self, packet):
         """Update orientation data
@@ -147,6 +175,9 @@ class Dashboard:
         if self.tabs.active != 1:
             return
         timestamp, orn_data = packet.get_data()
+        if self._vis_time_offset is None:
+            self._vis_time_offset = timestamp[0]
+        timestamp -= self._vis_time_offset
         new_data = dict(zip(ORN_LIST, np.array(orn_data)[:, np.newaxis]))
         new_data['t'] = timestamp
         self.doc.add_next_tick_callback(partial(self._update_orn, new_data=new_data))
@@ -187,6 +218,9 @@ class Dashboard:
         if self.mode == "impedance":
             return
         timestamp, _ = packet.get_data()
+        if self._vis_time_offset is None:
+            self._vis_time_offset = timestamp[0]
+        timestamp -= self._vis_time_offset
         new_data = dict(zip(['marker', 't', 'code'], [np.array([0.01, self.n_chan + 0.99, None], dtype=np.double),
                                                       np.array([timestamp[0], timestamp[0], None], dtype=np.double)]))
         self.doc.add_next_tick_callback(partial(self._update_marker, new_data=new_data))
@@ -222,7 +256,7 @@ class Dashboard:
                     imp_status.append("<5K\u03A9")  # As the ADS is not precise in low values.
 
             data = {"impedance": imp_status,
-                    'channel':   [CHAN_LIST[i] for i in range(0, self.n_chan)],
+                    'channel':   self.chan_key_list,
                     'row':       ['1' for i in range(self.n_chan)],
                     'color':     color
                     }
@@ -294,6 +328,9 @@ class Dashboard:
         if self.exg_mode == 'EEG':
             self._heart_rate_source.stream({'heart_rate': ['NA']}, rollover=1)
             return
+        if CHAN_LIST[0] not in self.chan_key_list:
+            print('WARNING: Heart rate estimation works only when channel 1 is enabled.')
+            return
         if self.rr_estimator is None:
             self.rr_estimator = HeartRateEstimator(fs=self.exg_fs)
             # Init R-peaks plot
@@ -323,13 +360,14 @@ class Dashboard:
     @without_property_validation
     def _change_scale(self, attr, old, new):
         """Change y-scale of ExG plot"""
+        logger.debug(f"ExG scale has been changed from {old} to {new}")
         new, old = SCALE_MENU[new], SCALE_MENU[old]
         old_unit = 10 ** (-old)
         self.y_unit = 10 ** (-new)
 
         for chan, value in self._exg_source_ds.data.items():
-            if chan in CHAN_LIST:
-                temp_offset = self.offsets[CHAN_LIST.index(chan)]
+            if chan in self.chan_key_list:
+                temp_offset = self.offsets[self.chan_key_list.index(chan)]
                 self._exg_source_ds.data[chan] = (value - temp_offset) * (old_unit / self.y_unit) + temp_offset
         self._r_peak_source.data['r_peak'] = (np.array(self._r_peak_source.data['r_peak']) - self.offsets[0]) * \
                                              (old_unit / self.y_unit) + self.offsets[0]
@@ -338,11 +376,13 @@ class Dashboard:
     @without_property_validation
     def _change_t_range(self, attr, old, new):
         """Change time range"""
+        logger.debug(f"Time scale has been changed from {old} to {new}")
         self._set_t_range(TIME_RANGE_MENU[new])
 
     @gen.coroutine
     def _change_mode(self, attr, old, new):
         """Set EEG or ECG mode"""
+        logger.debug(f"ExG mode has been changed to {new}")
         self.exg_mode = new
 
     def _init_doc(self, doc):
@@ -358,32 +398,40 @@ class Dashboard:
         # Create tabs
         if self.mode == "signal":
             exg_tab = Panel(child=self.exg_plot, title="ExG Signal")
-            orn_tab = Panel(child=column([self.acc_plot, self.gyro_plot, self.mag_plot]),
+            orn_tab = Panel(child=column([self.acc_plot, self.gyro_plot, self.mag_plot], sizing_mode='scale_width'),
                             title="Orientation")
             fft_tab = Panel(child=self.fft_plot, title="Spectral analysis")
-            self.tabs = Tabs(tabs=[exg_tab, orn_tab, fft_tab], width=600)
+            self.tabs = Tabs(tabs=[exg_tab, orn_tab, fft_tab], width=400, sizing_mode='scale_width')
             self.recorder_widget = self._init_recorder()
+            self.set_marker_widget = self._init_set_marker()
+            self.baseline_widget = CheckboxGroup(labels=['Baseline correction'], active=[0])
+
         elif self.mode == "impedance":
             imp_tab = Panel(child=self.imp_plot, title="Impedance")
-            self.tabs = Tabs(tabs=[imp_tab], width=600)
-        banner = Div(text="""<font size="5.5">Explorepy Dashboard</font> <a href="https://www.mentalab.co"><img src=
+            self.tabs = Tabs(tabs=[imp_tab], width=500, sizing_mode='scale_width')
+        banner = Div(text=""" <a href="https://www.mentalab.com"><img src=
         "https://images.squarespace-cdn.com/content/5428308ae4b0701411ea8aaf/1505653866447-R24N86G5X1HFZCD7KBWS/
         Mentalab%2C+Name+copy.png?format=1500w&content-type=image%2Fpng" alt="Mentalab"  width="225" height="39">""",
-                     width=1900, height=50, css_classes=["banner"], align='center')
-
+                     width=1500, height=50, css_classes=["banner"], align='center', sizing_mode="stretch_width")
+        heading = Div(text=""" """, height=2, sizing_mode="stretch_width")
         if self.mode == 'signal':
-            self.doc.add_root(column(banner,
-                                     Spacer(width=600, height=20),
-                                     row([m_widgetbox, Spacer(width=25, height=500), self.tabs,
-                                          Spacer(width=700, height=600), self.recorder_widget])
-                                     )
-                              )
+            layout = column([heading,
+                             banner,
+                             row(m_widgetbox,
+                                 Spacer(width=10, height=200),
+                                 self.tabs,
+                                 Spacer(width=10, height=300),
+                                 column(Spacer(width=170, height=50), self.baseline_widget, self.recorder_widget, self.set_marker_widget),
+                                 Spacer(width=50, height=300)),
+                             ],
+                            sizing_mode="stretch_both")
+
         elif self.mode == 'impedance':
-            self.doc.add_root(column(banner,
-                                     Spacer(width=600, height=20),
-                                     row([m_widgetbox, Spacer(width=25, height=500), self.tabs])
-                                     )
-                              )
+            layout = column(banner,
+                            Spacer(width=600, height=20),
+                            row([m_widgetbox, Spacer(width=25, height=500), self.tabs])
+                            )
+        self.doc.add_root(layout)
         self.doc.add_periodic_callback(self._update_fft, 2000)
         self.doc.add_periodic_callback(self._update_heart_rate, 2000)
         if self.stream_processor:
@@ -398,28 +446,31 @@ class Dashboard:
         """Initialize all plots in the dashboard"""
         self.exg_plot = figure(y_range=(0.01, self.n_chan + 1 - 0.01), y_axis_label='Voltage', x_axis_label='Time (s)',
                                title="ExG signal",
-                               plot_height=600, plot_width=1270,
+                               plot_height=250, plot_width=500,
                                y_minor_ticks=int(10),
                                tools=[ResetTool()], active_scroll=None, active_drag=None,
-                               active_inspect=None, active_tap=None)
+                               active_inspect=None, active_tap=None, sizing_mode="scale_width")
 
-        self.mag_plot = figure(y_axis_label='Magnetometer [mgauss/LSB]', x_axis_label='Time (s)',
-                               plot_height=230, plot_width=1270,
+        self.mag_plot = figure(y_axis_label='Mag [mgauss/LSB]', x_axis_label='Time (s)',
+                               plot_height=100, plot_width=500,
                                tools=[ResetTool()], active_scroll=None, active_drag=None,
-                               active_inspect=None, active_tap=None)
-        self.acc_plot = figure(y_axis_label='Accelerometer [mg/LSB]',
-                               plot_height=190, plot_width=1270,
+                               active_inspect=None, active_tap=None, sizing_mode="scale_width")
+        self.acc_plot = figure(y_axis_label='Acc [mg/LSB]',
+                               plot_height=75, plot_width=500,
                                tools=[ResetTool()], active_scroll=None, active_drag=None,
-                               active_inspect=None, active_tap=None)
+                               active_inspect=None, active_tap=None, sizing_mode="scale_width")
         self.acc_plot.xaxis.visible = False
-        self.gyro_plot = figure(y_axis_label='Gyroscope [mdps/LSB]',
-                                plot_height=190, plot_width=1270,
+        self.gyro_plot = figure(y_axis_label='Gyro [mdps/LSB]',
+                                plot_height=75, plot_width=500,
                                 tools=[ResetTool()], active_scroll=None, active_drag=None,
-                                active_inspect=None, active_tap=None)
+                                active_inspect=None, active_tap=None, sizing_mode="scale_width")
         self.gyro_plot.xaxis.visible = False
 
         self.fft_plot = figure(y_axis_label='Amplitude (uV)', x_axis_label='Frequency (Hz)', title="FFT",
-                               x_range=(0, 70), plot_height=600, plot_width=1270, y_axis_type="log")
+                               x_range=(0, 70), plot_height=250, plot_width=500, y_axis_type="log",
+                               tools=[BoxZoomTool(), ResetTool()], active_scroll=None, active_drag=None,
+                               active_tap=None,
+                               sizing_mode="scale_width")
 
         self.imp_plot = self._init_imp_plot()
 
@@ -428,10 +479,11 @@ class Dashboard:
 
         # Initial plot line
         for i in range(self.n_chan):
-            self.exg_plot.line(x='t', y=CHAN_LIST[i], source=self._exg_source_ds,
+            self.exg_plot.line(x='t', y=self.chan_key_list[i], source=self._exg_source_ds,
                                line_width=1.0, alpha=.9, line_color="#42C4F7")
-            self.fft_plot.line(x='f', y=CHAN_LIST[i], source=self.fft_source, legend_label=CHAN_LIST[i] + " ",
-                               line_width=1.0, alpha=.9, line_color=FFT_COLORS[i])
+            self.fft_plot.line(x='f', y=self.chan_key_list[i], source=self.fft_source,
+                               legend_label=self.chan_key_list[i] + " ",
+                               line_width=1.5, alpha=.9, line_color=FFT_COLORS[i])
         self.fft_plot.yaxis.axis_label_text_font_style = 'normal'
         self.exg_plot.line(x='t', y='marker', source=self._marker_source,
                            line_width=1, alpha=.8, line_color='#7AB904', line_dash="4 4")
@@ -449,8 +501,7 @@ class Dashboard:
         self._set_t_range(WIN_LENGTH)
 
         # Set the formatting of yaxis ticks' labels
-        self.exg_plot.yaxis[0].formatter = PrintfTickFormatter(format="Ch %i")
-
+        self.exg_plot.yaxis.major_label_overrides = dict(zip(range(1, self.n_chan + 1), self.chan_key_list))
         for plot in self.plot_list:
             plot.toolbar.autohide = True
             plot.yaxis.axis_label_text_font_style = 'normal'
@@ -460,10 +511,10 @@ class Dashboard:
                 plot.legend.padding = 2
 
     def _init_imp_plot(self):
-        plot = figure(plot_width=600, plot_height=200, x_range=CHAN_LIST[0:self.n_chan],
-                      y_range=[str(1)], toolbar_location=None)
+        plot = figure(plot_width=600, plot_height=200, x_range=self.chan_key_list[0:self.n_chan],
+                      y_range=[str(1)], toolbar_location=None, sizing_mode="scale_width")
 
-        plot.circle(x='channel', y="row", radius=.3, source=self.imp_source, fill_alpha=0.6, color="color",
+        plot.circle(x='channel', y="row", size=50, source=self.imp_source, fill_alpha=0.6, color="color",
                     line_color='color', line_width=2)
 
         text_props = {"source":          self.imp_source, "text_align": "center",
@@ -472,9 +523,9 @@ class Dashboard:
 
         x = dodge("channel", -0.1, range=plot.x_range)
 
-        plot.text(x=x, y=dodge('row', -.4, range=plot.y_range),
+        plot.text(x=x, y=dodge('row', -.35, range=plot.y_range),
                   text="impedance", **text_props).glyph.text_font_size = "10pt"
-        plot.text(x=x, y=dodge('row', -.3, range=plot.y_range), text="channel",
+        plot.text(x=x, y=dodge('row', -.25, range=plot.y_range), text="channel",
                   **text_props).glyph.text_font_size = "12pt"
 
         plot.outline_line_color = None
@@ -488,62 +539,70 @@ class Dashboard:
     def _init_controls(self):
         """Initialize all controls in the dashboard"""
         # EEG/ECG Radio button
-        self.mode_control = widgets.Select(title="Signal", value='EEG', options=MODE_LIST, width=210)
+        self.mode_control = widgets.Select(title="Signal", value='EEG', options=MODE_LIST, width=170, height=50)
         self.mode_control.on_change('value', self._change_mode)
 
         self.t_range = widgets.Select(title="Time window", value="10 s", options=list(TIME_RANGE_MENU.keys()),
-                                      width=210)
+                                      width=170, height=50)
         self.t_range.on_change('value', self._change_t_range)
-        self.y_scale = widgets.Select(title="Y-axis Scale", value="1 mV", options=list(SCALE_MENU.keys()), width=210)
+        self.y_scale = widgets.Select(title="Y-axis Scale", value="1 mV", options=list(SCALE_MENU.keys()),
+                                      width=170, height=50)
         self.y_scale.on_change('value', self._change_scale)
 
         # Create device info tables
         columns = [widgets.TableColumn(field='heart_rate', title="Heart Rate (bpm)")]
         self.heart_rate = widgets.DataTable(source=self._heart_rate_source, index_position=None, sortable=False,
                                             reorderable=False,
-                                            columns=columns, width=210, height=50)
+                                            columns=columns, width=170, height=50)
 
         columns = [widgets.TableColumn(field='firmware_version', title="Firmware Version")]
         self.firmware = widgets.DataTable(source=self._firmware_source, index_position=None, sortable=False,
                                           reorderable=False,
-                                          columns=columns, width=210, height=50)
+                                          columns=columns, width=170, height=50)
 
         columns = [widgets.TableColumn(field='battery', title="Battery (%)")]
         self.battery = widgets.DataTable(source=self._battery_source, index_position=None, sortable=False,
                                          reorderable=False,
-                                         columns=columns, width=210, height=50)
+                                         columns=columns, width=170, height=50)
 
-        columns = [widgets.TableColumn(field='temperature', title="Temperature (C)")]
+        columns = [widgets.TableColumn(field='temperature', title="Device temperature (C)")]
         self.temperature = widgets.DataTable(source=self.temperature_source, index_position=None, sortable=False,
-                                             reorderable=False, columns=columns, width=210, height=50)
+                                             reorderable=False, columns=columns, width=170, height=50)
 
         columns = [widgets.TableColumn(field='light', title="Light (Lux)")]
         self.light = widgets.DataTable(source=self.light_source, index_position=None, sortable=False, reorderable=False,
-                                       columns=columns, width=210, height=50)
+                                       columns=columns, width=170, height=50)
+        if self.mode == 'signal':
+            widget_list = [Spacer(width=170, height=30), self.mode_control, self.y_scale, self.t_range, self.heart_rate,
+                           self.battery, self.temperature, self.firmware]
+        elif self.mode == 'impedance':
+            widget_list = [Spacer(width=170, height=40), self.battery, self.temperature, self.firmware]
 
-        # Add widgets to the doc
-        widget_box = widgetbox(
-            [Spacer(width=210, height=30), self.mode_control, self.y_scale, self.t_range, self.heart_rate,
-             self.battery, self.temperature, self.light, self.firmware], width=220)
+        widget_box = widgetbox(widget_list, width=175, height=450, sizing_mode='fixed')
         return widget_box
 
     def _init_recorder(self):
         self.rec_button = Toggle(label=u"\u25CF  Record", button_type="default", active=False,
-                                 width=210)
-        self.file_name_widget = TextInput(value="test_file", title="File name:", width=210)
-        self.file_type_widget = RadioGroup(labels=["EDF (BDF+)", "CSV"], active=0)
+                                 width=170, height=35)
+        self.file_name_widget = TextInput(value="test_file", title="File name:", width=170, height=50)
+        self.file_type_widget = RadioGroup(labels=["EDF (BDF+)", "CSV"], active=0, width=170, height=50)
+
         columns = [widgets.TableColumn(field='timer', title="Record time",
                                        formatter=widgets.StringFormatter(text_align='center'))]
-        self.timer = widgets.DataTable(source=self._timer_source, index_position=None, sortable=False, reorderable=False,
+        self.timer = widgets.DataTable(source=self._timer_source, index_position=None, sortable=False,
+                                       reorderable=False,
                                        header_row=False, columns=columns,
-                                       width=210, height=50, css_classes=["timer_widget"])
+                                       width=170, height=50, css_classes=["timer_widget"])
 
         self.rec_button.on_click(self._toggle_rec)
-        return column(Spacer(width=210, height=35), self.file_name_widget, self.file_type_widget, self.rec_button,
-                      self.timer)
+        return column([Spacer(width=170, height=5), self.file_name_widget, self.file_type_widget, self.rec_button,
+                      self.timer], width=170, height=200, sizing_mode='fixed')
 
     def _toggle_rec(self, active):
+        logger.debug(f"Pressed record button -> {active}")
         if active:
+            self.event_code_input.disabled = False
+            self.marker_button.disabled = False
             if self.explore.is_connected:
                 self.explore.record_data(file_name=self.file_name_widget.value,
                                          file_type=['edf', 'csv'][self.file_type_widget.active],
@@ -560,6 +619,8 @@ class Dashboard:
             self.rec_button.label = u"\u25CF  Record"
             self.doc.add_next_tick_callback(partial(self._update_rec_timer, new_data={'timer': '00:00:00'}))
             self.doc.remove_periodic_callback(self.rec_timer_id)
+            self.event_code_input.disabled = True
+            self.marker_button.disabled = True
 
     def _timer_callback(self):
         t_delta = (datetime.now() - self.rec_start_time).seconds
@@ -567,6 +628,29 @@ class Dashboard:
                                str(int(t_delta % 60)).zfill(2)])
         data = {'timer': timer_text}
         self.doc.add_next_tick_callback(partial(self._update_rec_timer, new_data=data))
+
+    def _init_set_marker(self):
+        self.marker_button = Button(label=u"Set", button_type="default", width=80, height=31, disabled=True)
+        self.event_code_input = TextInput(value="8", title="Event code:", width=80, disabled=True)
+        self.event_code_input.on_change('value', self._check_marker_value)
+        self.marker_button.on_click(self._set_marker)
+        return column([Spacer(width=170, height=5),
+                      row([self.event_code_input,
+                          column(Spacer(width=50, height=19), self.marker_button)], height=50, width=170)],
+                      width=170, height=50, sizing_mode='fixed'
+                      )
+
+    def _set_marker(self):
+        code = self.event_code_input.value
+        self.stream_processor.set_marker(int(code))
+
+    def _check_marker_value(self, attr, old, new):
+        try:
+            code = int(self.event_code_input.value)
+            if code < 7 or code > 65535:
+                raise ValueError('Value must be an integer between 8 and 65535')
+        except ValueError:
+            self.event_code_input.value = "7<val<65535"
 
     @gen.coroutine
     @without_property_validation
@@ -586,9 +670,11 @@ class Dashboard:
 def get_fft(exg, s_rate):
     """Compute FFT"""
     n_point = 1024
+    exg -= exg.mean(axis=1)[:, np.newaxis]
     freq = s_rate * np.arange(int(n_point / 2)) / n_point
     fft_content = np.fft.fft(exg, n=n_point) / n_point
     fft_content = np.abs(fft_content[:, range(int(n_point / 2))])
+    fft_content = gaussian_filter1d(fft_content, 1)
     return fft_content[:, 1:], freq[1:]
 
 

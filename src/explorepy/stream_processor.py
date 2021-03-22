@@ -5,16 +5,17 @@ This module is responsible for processing incoming stream from Explore device an
 from enum import Enum
 import time
 import struct
+import logging
 
 from explorepy.parser import Parser
 from explorepy.packet import DeviceInfo, CommandRCV, CommandStatus, EEG, Orientation, \
     Environment, EventMarker, CalibrationInfo
 from explorepy.filters import ExGFilter
 from explorepy.command import DeviceConfiguration, ZMeasurementEnable, ZMeasurementDisable
-from explorepy.tools import ImpedanceMeasurement, PhysicalOrientation
+from explorepy.tools import ImpedanceMeasurement, PhysicalOrientation, get_local_time
 
 TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp')
-
+logger = logging.getLogger(__name__)
 
 class StreamProcessor:
     """Stream processor class"""
@@ -40,6 +41,7 @@ class StreamProcessor:
             callback (function): Callback function to be called when there is a new packet in the topic
             topic (enum 'Topics'): Topic type
         """
+        logger.debug(f"Subscribe {callback.__name__} to {topic}")
         self.subscribers.setdefault(topic, set()).add(callback)
 
     def unsubscribe(self, callback, topic):
@@ -49,6 +51,7 @@ class StreamProcessor:
             callback (function): Callback function to be called when there is a new packet in the topic
             topic (enum 'Topics'): Topic type
         """
+        logger.debug(f"Unsubscribe {callback} from {topic}")
         self.subscribers.setdefault(topic, set()).discard(callback)
 
     def start(self, device_name=None, mac_address=None):
@@ -58,6 +61,9 @@ class StreamProcessor:
             device_name (str): Explore device name in form of <Explore_####>
             mac_address (str): MAC address of Explore device
         """
+        if device_name is None:
+            device_name = "Explore_" + str(mac_address[-5:-3]) + str(mac_address[-2:])
+        self.device_info["device_name"] = device_name
         self.parser = Parser(callback=self.process, mode='device')
         self.parser.start_streaming(device_name, mac_address)
         self.is_connected = True
@@ -74,13 +80,10 @@ class StreamProcessor:
         self.parser = Parser(callback=self.process, mode='file')
         self.is_connected = True
         self.parser.start_reading(filename=bin_file)
-        while not self.device_info:
-            time.sleep(.001)
-        self.parser.is_waiting = True
 
-    def read(self):
-        """Start reading the binary file"""
-        self.parser.is_waiting = False
+    def read_device_info(self, bin_file):
+        self.parser = Parser(callback=self.process, mode='file')
+        self.parser.read_device_info(bin_file)
 
     def stop(self):
         """Stop streaming"""
@@ -106,8 +109,8 @@ class StreamProcessor:
             self.apply_filters(packet=packet)
             self.dispatch(topic=TOPICS.filtered_ExG, packet=packet)
         elif isinstance(packet, DeviceInfo):
-            self.old_device_info = self.device_info
-            self.device_info = packet.get_info()
+            self.old_device_info = self.device_info.copy()
+            self.device_info.update(packet.get_info())
             self.dispatch(topic=TOPICS.device_info, packet=packet)
         elif isinstance(packet, CommandRCV):
             self.dispatch(topic=TOPICS.cmd_ack, packet=packet)
@@ -139,8 +142,9 @@ class StreamProcessor:
             cutoff_freq (Union[float, tuple]): Cut-off frequency (frequencies) for the filter
             filter_type (str): Filter type ['bandpass', 'lowpass', 'highpass', 'notch']
         """
+        logger.info(f"Adding a {filter_type} filter with cut-off freqs of {cutoff_freq}.")
         while not self.device_info:
-            print('Waiting for device info packet...')
+            logger.warning('No device info is available. Waiting for device info packet...')
             time.sleep(.2)
         self.filters.append(ExGFilter(cutoff_freq=cutoff_freq,
                                       filter_type=filter_type,
@@ -164,6 +168,7 @@ class StreamProcessor:
 
     def imp_initialize(self, notch_freq):
         """Activate impedance mode in the device"""
+        logger.info("Starting impedance measurement mode...")
         cmd = ZMeasurementEnable()
         if self.configure_device(cmd):
             self._is_imp_mode = True
@@ -190,16 +195,18 @@ class StreamProcessor:
             self.physical_orn.status = "READY"
         else:
             self.physical_orn.status = "NOT READY"
-            print('Calibration data does not exist. If you need physical orientation, calibrate your device first.')
+            logger.info('Calibration coefs for pysical orientation does not exist. If you need physical orientation,'
+                        ' calibrate the device first.')
 
     def set_marker(self, code):
         """Set a marker in the stream"""
+        logger.info(f"Setting a marker with code: {code}")
         if not isinstance(code, int):
             raise TypeError('Marker code must be an integer!')
         if 0 <= code <= 7:
             raise ValueError('Marker code value is not valid')
 
-        self.process(EventMarker(timestamp=time.time() - self.parser.start_time,
+        self.process(EventMarker(timestamp=get_local_time(),
                                  payload=bytearray(struct.pack('<H', code) + b'\xaf\xbe\xad\xde')))
 
     def compare_device_info(self, new_device_info):
@@ -213,9 +220,13 @@ class StreamProcessor:
         """
         assert self.device_info, "The internal device info has not been set yet!"
         if new_device_info['sampling_rate'] != self.old_device_info['sampling_rate']:
-            print("Sampling rate has been changed in the file.")
+            logger.info(f"Sampling rate has been changed to {new_device_info['sampling_rate']} in the file.")
             return False
         if new_device_info['adc_mask'] != self.old_device_info['adc_mask']:
-            print("ADC mask has been changed in the file.")
+            print(f"ADC mask has been changed to {new_device_info['adc_mask']} in the file.")
             return False
         return True
+
+    def send_timestamp(self):
+        """Send host timestamp to the device"""
+        self._device_configurator.send_timestamp()

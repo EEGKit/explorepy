@@ -1,6 +1,30 @@
 
 Changelog
 =========
+
+1.3.0 (30-12-2020)
+------------------
+* GUI resizing for different screen resolutions
+* Added event button to dashboard
+* Improvement of impedance measurement
+* Fixed minor bugs
+
+1.2.0 (25-11-2020)
+------------------
+* Standalone installer for Windows OS
+* Fix bugs in ExploreSDK
+* Create new file on device settings change
+
+
+1.1.0 (27-08-2020)
+------------------
+* MacOS support
+* Fix bugs
+* Add module disable/enable feature
+* Enhanced user interface
+* Add unique lsl stream names
+
+
 1.0.0 (22-05-2020)
 ------------------
 * Add ExploreSDK as the Bluetooth interface

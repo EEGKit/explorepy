@@ -20,9 +20,9 @@
     :alt: PyPI Package latest release
     :target: https://pypi.org/project/explorepy
 
-.. |commits-since| image:: https://img.shields.io/github/commits-since/Mentalab-hub/explorepy/v1.0.0.svg
+.. |commits-since| image:: https://img.shields.io/github/commits-since/Mentalab-hub/explorepy/v1.3.0.svg
     :alt: Commits since latest release
-    :target: https://github.com/Mentalab-hub/explorepy/compare/v1.0.0...master
+    :target: https://github.com/Mentalab-hub/explorepy/compare/v1.3.0...master
 
 .. |wheel| image:: https://img.shields.io/pypi/wheel/explorepy.svg
     :alt: PyPI Wheel
@@ -43,7 +43,7 @@
 Explorepy overview
 ==================
 
-Explorepy is an open-source Python-based biosignal acquisition API for Mentalab's Explore device. It provides users the following features:
+Explorepy is Mentalab's open-source Python-based biosignal acquisition API for working with Mentalab Explore device. Amongst many things, it provides the following features:
 
 * Real-time streaming of ExG, orientation and environmental data
 * Real-time visualization
@@ -55,16 +55,22 @@ Explorepy is an open-source Python-based biosignal acquisition API for Mentalab'
 
 Quick installation
 ==================
+On a Windows machine, Explorepy can be installed using the installable file uploaded in
+the `release page <https://github.com/Mentalab-hub/explorepy/releases>`_ or using pip. Please note using the installable
+files, the dependencies will be installed automatically.
+
+The following instructions are for other operating systems or in case you want to build the package yourself on Windows.
+
 
 Requirements
 ------------
 
-* Python 3.5 or newer version
-* Visual Studio 2015 community edition (only Windows)
+* Python 3.6 or newer versions
+* Visual Studio 2015 community edition (only Windows, in case of building the package)
 * Bluetooth header files (only Linux -> use this command: ``sudo apt-get install libbluetooth-dev``)
 
 
-Please check `installation page <https://explorepy.readthedocs.io/en/latest/installation.html>`_ for more detailed instruction.
+Please check out the  `installation page <https://explorepy.readthedocs.io/en/latest/installation.html>`_ for more detailed instructions.
 
 To install ``explorepy`` from PyPI run:
 ::
@@ -72,7 +78,7 @@ To install ``explorepy`` from PyPI run:
     pip install explorepy
 
 
-To install the latest development version run:
+To install the latest development version (git must be installed before running this command):
 ::
 
     pip install git+https://github.com/Mentalab-hub/explorepy
@@ -83,6 +89,7 @@ Get started
 
 CLI command
 -----------
+For a simple, quick start of Explorepy,  run:
 
 ``explorepy acquire -n Explore_XXXX``
 
@@ -92,7 +99,7 @@ Enter ``explorepy -h`` for help.
 Python code
 -----------
 
-The following code connects to the Explore device and prints the data.
+When working in Python, the following connects to the Explore device and prints the data.
 
 ::
 
@@ -101,7 +108,7 @@ The following code connects to the Explore device and prints the data.
     explorer.connect(device_name="Explore_XXXX")  # Put your device Bluetooth name
     explorer.acquire()
 
-You can also visualize signals in real-time.
+You can also visualize the data in real-time.
 
 ::
 
@@ -125,30 +132,31 @@ ECG with heart beat detection:
 Documentation
 =============
 
-To see full documentation of the API, visit: https://explorepy.readthedocs.io/
+For the full documentation of the API, visit: https://explorepy.readthedocs.io/
 
 
 Authors
 =======
-- `Sebastian Herberger`_
 - `Mohamad Atayi`_
-- `Masooma Fazelian`_
 - `Salman Rahman`_
-- `Philipp Jakovleski`_
 - `Andreas Gutsche`_
+- `Masooma Fazelian`_
+- `Philipp Jakovleski`_
+- `Florian Sesser`_
+- `Sebastian Herberger`_
 
 
-.. _Sebastian Herberger: https://github.com/SHerberger
 .. _Mohamad Atayi: https://github.com/bmeatayi
-.. _Masooma Fazelian: https://github.com/fazelian
 .. _Salman Rahman: https://github.com/salman2135
-.. _Philipp Jakovleski: https://github.com/philippjak
 .. _Andreas Gutsche: https://github.com/andyman410
-
+.. _Masooma Fazelian: https://github.com/fazelian
+.. _Philipp Jakovleski: https://github.com/philippjak
+.. _Florian Sesser : https://github.com/hacklschorsch
+.. _Sebastian Herberger: https://github.com/SHerberger
 
 License
 =======
-This project is licensed under the `MIT <https://github.com/Mentalab-hub/explorepy/blob/master/LICENSE>`_ license.
+This project is licensed under the `MIT <https://github.com/Mentalab-hub/explorepy/blob/master/LICENSE>`_ license. You can reach us at contact@mentalab.com.
 
 
 

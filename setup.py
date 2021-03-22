@@ -28,19 +28,22 @@ def read(*names, **kwargs):
         return fh.read()
 
 
-my_req = ['numpy', 'scipy', 'pyedflib==0.1.15', 'click==7.0', 'appdirs==1.4.3']
+my_req = ['numpy', 'scipy', 'pyedflib==0.1.15', 'click==7.0', 'appdirs==1.4.3', 'sentry_sdk==0.20.3']
 ext_modules_list = []
+current_platform = sys.platform
+
 if not os.environ.get('READTHEDOCS'):
-    my_req.append('pybluez==0.22')  # Add pybluez if the environment is other than READTHEDOCS
     my_req.append('pylsl')
-    my_req.append('bokeh==1.4.0')
+    my_req.append('bokeh==2.2.3')
+
+    if current_platform != 'darwin':
+        my_req.append('pybluez==0.22')
 
     libPath = "lib"
-    current_platform = sys.platform
     if current_platform == 'win32' or current_platform == 'win64':
         windows_lib_path = os.path.join(libPath, 'windows')
         ext_modules_list.append(Extension(
-            name='_exploresdk',
+            name='explorepy._exploresdk',
             sources=[os.path.join(windows_lib_path, 'swig_interface_wrap.cxx'),
                      os.path.join(windows_lib_path, 'BluetoothHelpers.cpp'),
                      os.path.join(windows_lib_path, 'DeviceINQ.cpp'),
@@ -52,7 +55,7 @@ if not os.environ.get('READTHEDOCS'):
         linux_lib_path = os.path.join(libPath, 'linux')
 
         ext_modules_list.append(Extension(
-            name='_exploresdk',
+            name='explorepy._exploresdk',
             sources=[os.path.join(linux_lib_path, 'swig_interface_wrap.cxx'),
                      os.path.join(linux_lib_path, 'DeviceINQ.cpp'),
                      os.path.join(linux_lib_path, 'BTSerialPortBinding.cpp')],
@@ -60,12 +63,18 @@ if not os.environ.get('READTHEDOCS'):
             swig_opts=['-c++']
         ))
     else:
-        # Mac implementation
-        source_files = []
-
+        if sys.version_info >= (3, 6):
+            my_req.append('pyobjc-core>=6')
+            my_req.append('pyobjc-framework-Cocoa>=6')
+        else:
+            my_req.append('pyobjc-core>=3.1,<6')
+            my_req.append('pyobjc-framework-Cocoa>=3.1,<6')
+        os.system('cp  lib/mac/_exploresdk.so  src/explorepy')
+        os.system('cp  lib/mac/btScan  src/explorepy')
+        os.system('cp  lib/mac/exploresdk.py  src/explorepy')
 setup(
     name='explorepy',
-    version='1.0.0',
+    version='1.3.0',
 
     license='MIT license',
     description='Python API for Mentalab biosignal aquisition devices',

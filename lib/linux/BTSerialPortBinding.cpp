@@ -1,3 +1,4 @@
+#include <iostream>
 #include <string>
 #include <stdlib.h>
 #include <unistd.h>
@@ -85,8 +86,7 @@ int BTSerialPortBinding::Connect()
 
 	// connect to server
 	int status = connect(data->s, (struct sockaddr *)&addr, sizeof(addr));
-	//fprintf(stdout, " the status code of connect method is %d\n", status);
-	
+
 	int sock_flags = fcntl(data->s, F_GETFL, 0);
 	fcntl(data->s, F_SETFL, sock_flags | O_NONBLOCK);
 
@@ -108,12 +108,12 @@ void BTSerialPortBinding::Close()
 }
 
 void BTSerialPortBinding::Read(char *bt_buffer, int* bt_length)
-{	
+{
 	if (data->s == 0)
 		//throw ExploreException("connection has been closed");
 		fprintf(stdout, "connection has been closed");
 	//allocating space in buffer
-	 
+
 	fd_set set;
 	FD_ZERO(&set);
 	FD_SET(data->s, &set);
@@ -122,24 +122,39 @@ void BTSerialPortBinding::Read(char *bt_buffer, int* bt_length)
 	int nfds = (data->s > data->rep[0]) ? data->s : data->rep[0];
 	int size = -1;
 
+	try{
+
 	if (pselect(nfds + 1, &set, NULL, NULL, NULL, NULL) >= 0)
 	{
 		if (FD_ISSET(data->s, &set)){
- 
-			size = recv(data->s, bt_buffer, *bt_length, MSG_WAITALL);
-			//fprintf(stdout, "length is %d and size is %d \n", *bt_length, size);
+
+			size = recv(data->s, bt_buffer, *bt_length, 0);
+
+//			cout << "length is " << *bt_length << "size is " <<  size << endl;
+			if(size < 0)
+			{
+                		throw ExploreReadBufferException("EMPTY_BUFFER_ERROR");
+                		cout << "length is " << *bt_length << "size is " <<  size << endl;
+			}
+
 
 		}
+
 		else // when no data is read from rfcomm the connection has been closed.
 			fprintf(stdout, " no data is read from rfcomm");
-	}
+	}}
 
-	if (size < 0)
-		fprintf(stdout, " the read method failed! :(");
-		//throw ExploreException("Error reading from connection");
-	
+	catch (abi::__forced_unwind&) {
+     throw;
 
-	return;
+    }
+    catch(ExploreReadBufferException &e) {
+        throw ExploreReadBufferException("EMPTY_BUFFER_ERROR");
+    }
+
+
+
+
 }
 
 void BTSerialPortBinding::Write(const char *write_buffer, int length)
@@ -154,9 +169,25 @@ void BTSerialPortBinding::Write(const char *write_buffer, int length)
 		//throw ExploreException("Attempting to write to a closed connection");
 		fprintf(stdout, "write_buffer cannot be null");
 
-	if (write(data->s, write_buffer, length) != length)
+    int write_length = -1;
+
+    try{
+
+    //write_length = write(data->s, write_buffer, length);
+
+    write_length = send(data->s, write_buffer, length, 0);
+
+	if (write_length != length)
 		//throw ExploreException("Writing attempt was unsuccessful");
 		fprintf(stdout, "Writing attempt was unsuccessful");
+    }
+
+     catch (abi::__forced_unwind&) { // reference to the base of a polymorphic object
+      throw;// information from length_error printed
+
+    }
+
+
 }
 
 bool BTSerialPortBinding::IsDataAvailable()
