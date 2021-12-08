@@ -9,12 +9,12 @@ import logging
 
 from explorepy.parser import Parser
 from explorepy.packet import DeviceInfo, CommandRCV, CommandStatus, EEG, Orientation, \
-    Environment, EventMarker, CalibrationInfo
+    Environment, EventMarker, CalibrationInfo, TriggerOut, TriggerIn
 from explorepy.filters import ExGFilter
 from explorepy.command import DeviceConfiguration, ZMeasurementEnable, ZMeasurementDisable
 from explorepy.tools import ImpedanceMeasurement, PhysicalOrientation, get_local_time
 
-TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp')
+TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp trigger_in')
 logger = logging.getLogger(__name__)
 
 class StreamProcessor:
@@ -122,6 +122,11 @@ class StreamProcessor:
             self.dispatch(topic=TOPICS.marker, packet=packet)
         elif isinstance(packet, CalibrationInfo):
             self.imp_calib_info = packet.get_info()
+        elif isinstance(packet, TriggerIn):
+            self.dispatch(topic=TOPICS.trigger_in, packet=packet)
+            print(packet)
+        elif isinstance(packet, TriggerOut):
+            print(packet)
         elif not packet:
             self.is_connected = False
 

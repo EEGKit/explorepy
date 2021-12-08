@@ -264,6 +264,22 @@ class Dashboard:
         else:
             raise RuntimeError("Trying to compute impedances while the dashboard is not in Impedance mode!")
 
+    def trigger_in_callback(self, packet):
+        """Update trigger
+        Args:
+            packet (explorepy.packet.TriggerIn): Event marker packet
+        """
+        if self.mode == "impedance":
+            return
+        _, timestamp = packet.get_data() # Note that precise_ts should be used here not the default packet Timestamp
+        if self._vis_time_offset is None:
+            self._vis_time_offset = timestamp[0]
+        timestamp -= self._vis_time_offset
+        new_data = dict(zip(['marker', 't', 'code'], [np.array([0.01, self.n_chan + 0.99, None], dtype=np.double),
+                                                      np.array([timestamp[0], timestamp[0], None], dtype=np.double)]))
+        self.doc.add_next_tick_callback(partial(self._update_marker, new_data=new_data))
+
+
     @gen.coroutine
     @without_property_validation
     def _update_exg(self, new_data):
@@ -441,6 +457,7 @@ class Dashboard:
             self.stream_processor.subscribe(topic=TOPICS.marker, callback=self.marker_callback)
             self.stream_processor.subscribe(topic=TOPICS.env, callback=self.info_callback)
             self.stream_processor.subscribe(topic=TOPICS.imp, callback=self.impedance_callback)
+            self.stream_processor.subscribe(topic=TOPICS.trigger_in, callback=self.trigger_in_callback)
 
     def _init_plots(self):
         """Initialize all plots in the dashboard"""

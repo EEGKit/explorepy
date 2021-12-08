@@ -27,6 +27,9 @@ class PACKET_ID(IntEnum):
     CMDSTAT = 193
     MARKER = 194
     CALIBINFO = 195
+    EEG98X2 = 147
+    TRIGGER_OUT = 28
+    TRIGGER_IN = 29
 
 
 EXG_UNIT = 1e-6
@@ -152,6 +155,32 @@ class EEG98(EEG):
     def _check_fletcher(self, fletcher):
         if not fletcher == b'\xaf\xbe\xad\xde':
             raise FletcherError('Fletcher value is incorrect!')
+
+    def __str__(self):
+        return "EEG: " + str(self.data[:, -1]) + "\tEEG STATUS: " + str(self.status)
+
+
+class EEG98X2(EEG):
+    """EEG packet for 8 channel device"""
+    def __init__(self, timestamp, payload):
+        super().__init__(timestamp, payload)
+        self._convert(payload[:-4])
+        self._check_fletcher(payload[-4:])
+
+    def _convert(self, bin_data):
+        data = Packet.int24to32(bin_data)
+        n_chan = -1
+        v_ref = 2.4
+        n_packet = 8
+        data = data.reshape((n_packet, n_chan)).astype(np.float).T
+        gain = EXG_UNIT * ((2 ** 23) - 1) * 6.
+        self.data = np.round(data[2:, :] * v_ref / gain, 2)
+        self.status = (hex(bin_data[0]), hex(bin_data[1]), hex(bin_data[2]), hex(bin_data[3]), hex(bin_data[4]), hex(bin_data[5]))
+
+    def _check_fletcher(self, fletcher):
+        if not fletcher == b'\xaf\xbe\xad\xde':
+            # raise FletcherError('Fletcher value is incorrect!')
+            pass
 
     def __str__(self):
         return "EEG: " + str(self.data[:, -1]) + "\tEEG STATUS: " + str(self.status)
@@ -453,6 +482,49 @@ class CalibrationInfo(Packet):
         return "calibration info: slope = " + str(self.slope) + "\toffset = " + str(self.offset)
 
 
+class TriggerOut(Packet):
+    """Trigger Out packet"""
+    def __init__(self, timestamp, payload):
+        super(TriggerOut, self).__init__(timestamp, payload)
+        self._convert(payload[:-4])
+        self._check_fletcher(payload[-4:])
+
+    def _convert(self, bin_data):
+        precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
+        self.precise_ts = precise_ts
+
+    def _check_fletcher(self, fletcher):
+        if not fletcher == b'\xaf\xbe\xad\xde':
+            raise FletcherError('Fletcher value is incorrect!')
+
+    def __str__(self):
+        return "Trigger Out: precise_ts = " + str(self.precise_ts)
+
+
+class TriggerIn(Packet):
+    """Trigger In packet"""
+    def __init__(self, timestamp, payload):
+        super().__init__(timestamp, payload)
+        self._convert(payload[:-4])
+        self._check_fletcher(payload[-4:])
+
+    def _convert(self, bin_data):
+        precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
+        self.precise_ts = precise_ts/10000
+
+    def _check_fletcher(self, fletcher):
+        if not fletcher == b'\xaf\xbe\xad\xde':
+            raise FletcherError('Fletcher value is incorrect!')
+
+    def __str__(self):
+        return "Trigger In: precise_ts = " + str(self.precise_ts)
+
+    def get_data(self, srate=None):
+        """Get trigger data
+        Args:
+            srate: NOT USED. Only for compatibility purpose"""
+        return [self.timestamp], [self.precise_ts]
+
 PACKET_CLASS_DICT = {
     PACKET_ID.ORN: Orientation,
     PACKET_ID.ENV: Environment,
@@ -468,5 +540,8 @@ PACKET_CLASS_DICT = {
     PACKET_ID.CMDRCV: CommandRCV,
     PACKET_ID.CMDSTAT: CommandStatus,
     PACKET_ID.CALIBINFO: CalibrationInfo,
-    PACKET_ID.MARKER: EventMarker
+    PACKET_ID.MARKER: EventMarker,
+    PACKET_ID.EEG98X2: EEG98X2,
+    PACKET_ID.TRIGGER_OUT: TriggerOut,
+    PACKET_ID.TRIGGER_IN: TriggerIn,
 }
