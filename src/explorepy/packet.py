@@ -28,8 +28,8 @@ class PACKET_ID(IntEnum):
     MARKER = 194
     CALIBINFO = 195
     EEG98X2 = 147
-    TRIGGER_OUT = 28
-    TRIGGER_IN = 29
+    TRIGGER_OUT = 178  # out of PC into Explore device
+    TRIGGER_IN = 177  # out of Explore device into PC
 
 
 EXG_UNIT = 1e-6
@@ -491,14 +491,19 @@ class TriggerOut(Packet):
 
     def _convert(self, bin_data):
         precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
-        self.precise_ts = precise_ts
+        self.precise_ts = precise_ts/10000
+        label = np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4)
+        self.label = label
+        mac_address = hex(int(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=6)))
+        self.mac_address = mac_address
 
     def _check_fletcher(self, fletcher):
         if not fletcher == b'\xaf\xbe\xad\xde':
             raise FletcherError('Fletcher value is incorrect!')
 
     def __str__(self):
-        return "Trigger Out: precise_ts = " + str(self.precise_ts)
+        return "Trigger Out: precise_ts = " + str(self.precise_ts) + "\tlabel is: " + str(self.label) + \
+            "\tMAC address tail is: " + str(self.mac_address)
 
 
 class TriggerIn(Packet):
@@ -509,15 +514,25 @@ class TriggerIn(Packet):
         self._check_fletcher(payload[-4:])
 
     def _convert(self, bin_data):
+        # print(bin_data)
         precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
         self.precise_ts = precise_ts/10000
+        label = np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4)
+        if label == 240:
+            label = "Sync"
+        if label == 15:
+            label = "ADS_Start"
+        self.label = label
+        mac_address = hex(int(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=6)))
+        self.mac_address = mac_address
 
     def _check_fletcher(self, fletcher):
         if not fletcher == b'\xaf\xbe\xad\xde':
             raise FletcherError('Fletcher value is incorrect!')
 
     def __str__(self):
-        return "Trigger In: precise_ts = " + str(self.precise_ts)
+        return "Trigger In: precise_ts = " + str(self.precise_ts) + "\tlabel is: " + str(self.label) + \
+            "\tMAC address tail is: " + str(self.mac_address)
 
     def get_data(self, srate=None):
         """Get trigger data
