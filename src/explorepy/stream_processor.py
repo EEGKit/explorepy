@@ -17,6 +17,7 @@ from explorepy.tools import ImpedanceMeasurement, PhysicalOrientation, get_local
 TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp trigger_in')
 logger = logging.getLogger(__name__)
 
+
 class StreamProcessor:
     """Stream processor class"""
 
@@ -64,6 +65,9 @@ class StreamProcessor:
         if device_name is None:
             device_name = "Explore_" + str(mac_address[-5:-3]) + str(mac_address[-2:])
         self.device_info["device_name"] = device_name
+        # self.device_info["adc_mask"] = [1, 1, 1, 1, 1, 1, 1, 1]
+        # self.device_info["sampling_rate"] = 250.0
+        # self.device_info["firmware_version"] = '2.2.1'
         self.parser = Parser(callback=self.process, mode='device')
         self.parser.start_streaming(device_name, mac_address)
         self.is_connected = True
