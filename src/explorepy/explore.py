@@ -193,6 +193,9 @@ class Explore:
         self.stream_processor.subscribe(callback=self.recorders['exg'].write_data, topic=TOPICS.raw_ExG)
         self.stream_processor.subscribe(callback=self.recorders['orn'].write_data, topic=TOPICS.raw_orn)
         self.stream_processor.subscribe(callback=self.recorders['marker'].set_marker, topic=TOPICS.marker)
+        self.stream_processor.subscribe(callback=self.recorders['marker'].set_marker, topic=TOPICS.trigger_in)
+        self.stream_processor.subscribe(callback=self.recorders['marker'].set_marker, topic=TOPICS.trigger_out)
+
 
         def device_info_callback(packet):
             new_device_info = packet.get_info()

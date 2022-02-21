@@ -14,7 +14,7 @@ from explorepy.filters import ExGFilter
 from explorepy.command import DeviceConfiguration, ZMeasurementEnable, ZMeasurementDisable
 from explorepy.tools import ImpedanceMeasurement, PhysicalOrientation, get_local_time
 
-TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp trigger_in')
+TOPICS = Enum('Topics', 'raw_ExG filtered_ExG device_info marker raw_orn mapped_orn cmd_ack env cmd_status imp trigger_in trigger_out')
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +130,7 @@ class StreamProcessor:
             self.dispatch(topic=TOPICS.trigger_in, packet=packet)
             print(packet)
         elif isinstance(packet, TriggerOut):
+            self.dispatch(topic=TOPICS.trigger_out, packet=packet)
             print(packet)
         elif not packet:
             self.is_connected = False

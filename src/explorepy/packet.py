@@ -490,16 +490,22 @@ class TriggerOut(Packet):
         self._check_fletcher(payload[-4:])
 
     def _convert(self, bin_data):
-        precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
+        precise_ts = np.asscalar(np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0))
         self.precise_ts = precise_ts/10000
-        label = np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4)
-        self.label = label
+        label = np.asscalar(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4))
+        self.label = label+1000
         mac_address = hex(int(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=6)))
         self.mac_address = mac_address
 
     def _check_fletcher(self, fletcher):
         if not fletcher == b'\xaf\xbe\xad\xde':
             raise FletcherError('Fletcher value is incorrect!')
+
+    def get_data(self, srate=None):
+        """Get trigger data
+        Args:
+            srate: NOT USED. Only for compatibility purpose"""
+        return [self.precise_ts], [self.label]
 
     def __str__(self):
         return "Trigger Out: precise_ts = " + str(self.precise_ts) + "\tlabel is: " + str(self.label) + \
@@ -515,14 +521,16 @@ class TriggerIn(Packet):
 
     def _convert(self, bin_data):
         # print(bin_data)
-        precise_ts = np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0)
+        precise_ts = np.asscalar(np.frombuffer(bin_data, dtype=np.dtype(np.uint32).newbyteorder('<'), count=1, offset=0))
         self.precise_ts = precise_ts/10000
-        label = np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4)
+        label = np.asscalar(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=4))
+        """
         if label == 240:
             label = "Sync"
         if label == 15:
             label = "ADS_Start"
-        self.label = label
+        """
+        self.label = label+2000
         mac_address = hex(int(np.frombuffer(bin_data, dtype=np.dtype(np.uint16).newbyteorder('<'), count=1, offset=6)))
         self.mac_address = mac_address
 
@@ -538,7 +546,7 @@ class TriggerIn(Packet):
         """Get trigger data
         Args:
             srate: NOT USED. Only for compatibility purpose"""
-        return [self.timestamp], [self.precise_ts]
+        return [self.precise_ts], [self.label]
 
 PACKET_CLASS_DICT = {
     PACKET_ID.ORN: Orientation,
