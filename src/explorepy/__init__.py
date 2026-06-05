@@ -20,11 +20,11 @@ from .explore import Explore  # noqa
 
 
 __all__ = ["Explore", "command", "tools", "log_config"]
-__version__ = '4.4.0'
+__version__ = '4.5.0'
 
 this = sys.modules[__name__]
 # TODO appropriate library
-bt_interface_list = ['sdk', 'ble', 'mock', 'pyserial', 'usb']
+bt_interface_list = ['sdk', 'ble', 'mock', 'pyserial', 'usb', 'csv']
 this._bt_interface = 'ble'
 
 if not sys.version_info >= (3, 6):

@@ -26,6 +26,7 @@ from explorepy._exceptions import (
 )
 from explorepy.packet import (
     PACKET_CLASS_DICT,
+    PACKET_ID,
     DeviceInfo,
     Packet,
     PacketBIN
@@ -67,10 +68,11 @@ class Parser:
         self.total_packet_size_read = 0
         self.progress = 0
         self.progress_callback = progress_callback
+        self._generate_packet_impl = None
         self.header_len = 0
         self.data_len = 0
 
-    def start_streaming(self, device_name, mac_address):
+    def start_streaming(self, device_name, mac_address, file_path=None):
         """Start streaming data from Explore device"""
         self.device_name = device_name
         if is_ble_mode():
@@ -79,6 +81,11 @@ class Parser:
         elif explorepy.get_bt_interface() == 'mock':
             from explorepy.bt_mock_client import MockBtClient
             self.stream_interface = MockBtClient(device_name=device_name, mac_address=mac_address)
+        elif explorepy.get_bt_interface() == 'csv':
+            from explorepy.csv_client import CsvClient
+            device_id = str.split(device_name, '_')[1]  # split by underscore and take second part
+            ch_count = 32 if device_id[0] == 'D' else 8  # dynamic channel selection based on first character
+            self.stream_interface = CsvClient(ch_count, file_path=file_path)
         elif is_usb_mode():
             from explorepy.serial_client import SerialStream
             self.stream_interface = SerialStream(device_name=device_name)
@@ -87,6 +94,10 @@ class Parser:
                              "Please use the following command to use ExplorePy with a legacy device\n"
                              "pip install explorepy==3.2.1\n"
                              "https://explorepy.readthedocs.io/en/latest/explore_legacy_devices\n")
+        if explorepy.get_bt_interface() == 'csv':
+            self._generate_packet_impl = self._generate_packet_from_csv
+        else:
+            self._generate_packet_impl = self._generate_packet
         self.stream_interface.connect()
         self._stream()
 
@@ -159,7 +170,7 @@ class Parser:
         asyncio.set_event_loop(asyncio.new_event_loop())
         while self._do_streaming:
             try:
-                packet, packet_size = self._generate_packet()
+                packet, packet_size = self._generate_packet_impl()
                 self.total_packet_size_read += packet_size
                 self.callback(packet=packet)
             except ReconnectionFlowError:
@@ -363,11 +374,19 @@ class Parser:
                     break
             if pid_bin is None:
                 raise ValueError
-            self.header_len = 12 if pid_bin[0] == 99 else 8
+            self.header_len = (
+                12
+                if pid_bin[0] in (PACKET_ID.INFO_HYP, PACKET_ID.INFO_TIME_CMD)
+                else 8
+            )
             self.data_len = self.header_len - 4
             return pid_bin + self.stream_interface.read(self.header_len - 1)
         else:
             return self.stream_interface.read(self.header_len)
+
+    def _generate_packet_from_csv(self):
+        packet = self.stream_interface.read()
+        return packet, packet.packet_size.value
 
 
 class FileHandler:

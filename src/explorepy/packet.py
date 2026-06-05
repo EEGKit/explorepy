@@ -25,6 +25,7 @@ class PACKET_ID(IntEnum):
     # Info packet from BLE devices, applies to Explore Pro
     INFO_BLE = 98
     INFO_HYP = 99
+    INFO_TIME_CMD = 100
     # New info packet containing memory and board ID: this applies to all Explore+ systems
     INFO_V2 = 97
     INFO = 96
@@ -174,6 +175,21 @@ class PacketBIN(Packet):
 
     def __str__(self):
         return f"{binascii.hexlify(bytearray(self.bin_data))}"
+
+
+class CleanEEG(Packet):
+    def __init__(self, timestamp, payload):
+        self.timestamps = timestamp
+        self.data = payload
+
+    def _convert(self, bin_data):
+        self.data = bin_data
+
+    def get_data(self, exg_fs=None):
+        return self.timestamps, self.data
+
+    def __str__(self):
+        return f"Timestamps: {self.timestamps}, samples: {self.data}"
 
 
 class EEG(Packet):
@@ -681,7 +697,17 @@ class DeviceInfoBLE(DeviceInfoV2):
 
 
 class DeviceInfoHyp(DeviceInfoBLE):
-    pass
+    def get_info(self):
+        as_dict = super().get_info()
+        as_dict['is_hypersync'] = True
+        return as_dict
+
+
+class DeviceInfoBinTimeCmd(DeviceInfoHyp):
+    def get_info(self):
+        as_dict = super().get_info()
+        as_dict['time_cmd'] = True
+        return as_dict
 
 
 class CommandRCV(Packet):
@@ -822,6 +848,7 @@ PACKET_CLASS_DICT = {
     PACKET_ID.INFO_V2: DeviceInfoV2,
     PACKET_ID.INFO_BLE: DeviceInfoBLE,
     PACKET_ID.INFO_HYP: DeviceInfoHyp,
+    PACKET_ID.INFO_TIME_CMD: DeviceInfoBinTimeCmd,
     PACKET_ID.EEG94: EEG94,
     PACKET_ID.EEG98: EEG98,
     PACKET_ID.EEG99: EEG99,

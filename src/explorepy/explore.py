@@ -26,6 +26,7 @@ from scipy import signal as scipy_signal
 import explorepy
 from explorepy.command import (
     MemoryFormat,
+    SetBinaryTime,
     SetChTest,
     SetSPS,
     SoftReset
@@ -83,7 +84,7 @@ class Explore:
             imp_mode = self.stream_processor._is_imp_mode
         return imp_mode
 
-    def connect(self, device_name=None, mac_address=None):
+    def connect(self, device_name=None, mac_address=None, file_path=None):
         r"""
         Connects to the nearby device. If there are more than one device, the user is asked to choose one of them.
 
@@ -100,16 +101,18 @@ class Explore:
         self.stream_processor = StreamProcessor(
             debug=True if self.debug else False)
         self.stream_processor.start(
-            device_name=device_name, mac_address=mac_address)
+            device_name=device_name, mac_address=mac_address, file_path=file_path)
         cnt = 0
         cnt_limit = 20 if self.debug else 15
         while "adc_mask" not in self.stream_processor.device_info:
             logger.info("Waiting for device info packet...")
-            time.sleep(1)
+            time.sleep(.5)
             if cnt >= cnt_limit:
                 raise ConnectionAbortedError(
                     "Could not get info packet from the device")
             cnt += 1
+        if 'time_cmd' in self.stream_processor.device_info:
+            self.set_binary_time()
         if self.stream_processor.device_info['is_imp_mode'] is True:
             self.stream_processor.disable_imp()
         logger.info(
@@ -182,13 +185,15 @@ class Explore:
         if file_type not in ['edf', 'csv']:
             raise ValueError(
                 '{} is not a supported file extension!'.format(file_type))
+
         if imp_mode:
+            if not self.stream_processor.is_imp_running():
+                raise ValueError('Impedance measurement not running!')
             if file_type == 'edf':
                 raise ValueError(
                     '{} is not a supported file extension for recording impedance!'.format(file_type))
-            if notch_freq is None:
-                raise ValueError(
-                    'Missing notch frequency argument, please provide the notch frequency to get live impedance values')
+
+            notch_freq = self.stream_processor.get_power_line_freq() or 50
 
         duration = self._check_duration(duration)
 
@@ -260,7 +265,6 @@ class Explore:
                 impedance_values = packet.get_impedances()
 
                 real_values = np.array(impedance_values) / 2
-                print("Impedance:", real_values.tolist())
 
                 if file_type == 'csv':
                     row_data = [float(packet.timestamp), *real_values]
@@ -271,7 +275,6 @@ class Explore:
 
             self.stream_processor.subscribe(callback=handle_exg_impedance_packet, topic=TOPICS.raw_ExG)
             self.stream_processor.subscribe(callback=handle_impedance_packet, topic=TOPICS.imp)
-            self.stream_processor.imp_initialize(notch_freq=notch_freq)
             logger.info("Recording with impedance mode...")
         else:
             self.stream_processor.subscribe(callback=self.recorders['exg'].write_data, topic=TOPICS.raw_ExG)
@@ -301,8 +304,6 @@ class Explore:
 
             if is_impedance_mode:
                 try:
-                    self.stream_processor.disable_imp()
-
                     if 'handle_exg_impedance_callback' in self.recorders:
                         self.stream_processor.unsubscribe(
                             callback=self.recorders['handle_exg_impedance_callback'], topic=TOPICS.raw_ExG)
@@ -351,7 +352,7 @@ class Explore:
                                 self.timestamps = timestamps
                                 self.signals = signals
 
-                            def get_data(self, fs):
+                            def get_data(self):
                                 return self.timestamps, self.signals
 
                         timestamps = exg_array[:, 0]
@@ -653,6 +654,21 @@ class Explore:
         if self.stream_processor.configure_device(cmd):
             SettingsManager(self.device_name).set_sampling_rate(sampling_rate)
             return True
+
+    def set_binary_time(self):
+        """Set binary file to current time
+
+        Returns:
+            bool: True for success, False otherwise
+        """
+        try:
+            cmd = SetBinaryTime()
+            if self.stream_processor.configure_device(cmd):
+                logger.info('Device set to current time.')
+                return True
+        except ValueError as e:
+            logger.error('Error on setting the binary file time: {}'.format(e))
+            return False
 
     def reset_soft(self):
         """Reset the device to the default settings

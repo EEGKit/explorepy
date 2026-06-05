@@ -272,7 +272,7 @@ class FileRecorder:
             ch_info_list.append({
                 'label': ch[0],
                 'dimension': ch[1],
-                'sample_rate': self._fs,
+                'sample_frequency': self._fs,
                 'physical_max': ch[2],
                 'physical_min': ch[3],
                 'digital_max': 8388607,
@@ -362,10 +362,11 @@ class FileRecorder:
         self._data = np.concatenate((self._data, data), axis=1)
         self._timestamps += list(data[0, :])
         with lock:
-            if self._data.shape[1] > self._fs:
-                self._file_obj.writeSamples(list(self._data[:, :self._fs]))
+            num_samples_to_write = (self._data.shape[1] // self._fs) * self._fs
+            if num_samples_to_write > 0:
+                self._file_obj.writeSamples(list(self._data[:, :num_samples_to_write]))
                 self._write_edf_anno()
-                self._data = self._data[:, self._fs:]
+                self._data = self._data[:, num_samples_to_write:]
 
     def _process_packet_data(self, packet):
         """Helper function to extract and format data from a packet."""
@@ -730,7 +731,7 @@ def setup_usb_marker_port():
 def check_bin_compatibility(file_name):
     with open(file_name, "rb") as f:
         b = f.read(1).hex()
-        if b != "62" and b != "63":
+        if b not in {"62", "63", "64"}:
             raise ExplorePyDeprecationError()
 
 
